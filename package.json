@@ -8,7 +8,8 @@
     "dev": "node server.js",
     "dev:vercel": "vercel dev",
     "dev:netlify": "netlify dev",
-    "test:url": "node test-url.js"
+    "test:url": "node test-url.js",
+    "build": "echo \"No build required for functions-only site\""
   },
   "dependencies": {
     "@sparticuz/chromium": "^141.0.0",
