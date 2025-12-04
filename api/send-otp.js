@@ -2,14 +2,19 @@
 let chromium;
 try {
   chromium = require('@sparticuz/chromium');
-  // Configure Chromium for Netlify/Lambda environment
-  chromium.setGraphicsMode(false);
 } catch (e) {
+  // In local dev, this is fine – puppeteer (full) will be used instead
   console.warn('Failed to load @sparticuz/chromium:', e.message);
   chromium = null;
 }
 
-const puppeteer = require('puppeteer-core');
+// Use puppeteer (with Chromium) for local dev, puppeteer-core for serverless
+const isServerless =
+  !!process.env.LAMBDA_TASK_ROOT ||
+  !!process.env.AWS_EXECUTION_ENV ||
+  !!process.env.VERCEL ||
+  !!process.env.NETLIFY;
+const puppeteer = isServerless ? require('puppeteer-core') : require('puppeteer');
 const { v4: uuidv4 } = require('uuid');
 
 // Simple in-memory cache for sessions
@@ -145,7 +150,11 @@ class ZomotoStandalone {
    * Get browser launch options
    */
   async _getBrowserLaunchOptions() {
-    const isLambda = !!process.env.LAMBDA_TASK_ROOT || !!process.env.AWS_EXECUTION_ENV || !!process.env.NETLIFY;
+    const isLambda =
+      !!process.env.LAMBDA_TASK_ROOT ||
+      !!process.env.AWS_EXECUTION_ENV ||
+      !!process.env.VERCEL ||
+      !!process.env.NETLIFY;
     
     const baseArgs = [
       '--disable-dev-shm-usage',
@@ -165,34 +174,46 @@ class ZomotoStandalone {
       ignoreHTTPSErrors: true,
     };
 
-    // For Lambda/serverless environments, try to use @sparticuz/chromium
+    // For serverless environments (Vercel/Netlify/Lambda), try to use @sparticuz/chromium
     if (isLambda && chromium) {
       try {
-        // Get executable path - this might fail on Netlify if Chromium isn't properly bundled
         const executablePath = await chromium.executablePath();
-        
-        if (executablePath) {
-          return {
-            ...baseOptions,
-            defaultViewport: chromium.defaultViewport || { width: 1920, height: 1080 },
-            executablePath: executablePath,
-            headless: chromium.headless !== undefined ? chromium.headless : true,
-          };
+        if (!executablePath) {
+          throw new Error('chromium.executablePath() returned empty path');
         }
+
+        logger.debug(`Using Chromium executable: ${executablePath}`);
+        return {
+          ...baseOptions,
+          defaultViewport: chromium.defaultViewport || { width: 1920, height: 1080 },
+          executablePath,
+          headless: chromium.headless !== undefined ? chromium.headless : true,
+        };
       } catch (e) {
-        logger.warn('Failed to get chromium executable path:', e.message);
-        logger.warn('This might be a Netlify bundling issue. Consider using Vercel or ensuring Chromium is properly bundled.');
-        // Fall through to default options - this won't work but will give clearer error
+        logger.error('Failed to resolve Chromium executable path:', e.message);
+        // In a serverless environment, not having a Chromium binary means we cannot proceed
+        // Make this a clear, actionable error instead of a cryptic puppeteer-core error
+        throw new Error(
+          'Chromium executable not available in this serverless environment. ' +
+            'This function requires @sparticuz/chromium to be properly bundled. ' +
+            'On Vercel this is usually supported; if you see this error, ensure your deployment includes @sparticuz/chromium ' +
+            'or consider running this function on Vercel with the Node.js runtime.'
+        );
       }
     }
-    
-    // For local development or if Chromium setup fails
-    // Note: This will fail on Netlify without Chromium executable
-    logger.warn('Using default puppeteer options - this requires Chromium to be available');
-    return {
-      ...baseOptions,
-      defaultViewport: { width: 1920, height: 1080 },
-    };
+
+    // Local development: use regular puppeteer which bundles its own Chromium
+    if (!isLambda) {
+      return {
+        ...baseOptions,
+        defaultViewport: { width: 1920, height: 1080 },
+      };
+    }
+
+    // Ultimate fallback (should normally not be hit)
+    throw new Error(
+      'No browser executable configured. For serverless environments, @sparticuz/chromium must be available.'
+    );
   }
 
   /**
@@ -235,17 +256,31 @@ class ZomotoStandalone {
         'User agent setup'
       );
 
-      const zomatoPartnersUrl = process.env.ZOMATO_PARTNERS_URL || 'https://partner.zomato.com';
-      logger.debug('Navigating to login page...');
+      const zomatoPartnersUrl = process.env.ZOMATO_PARTNERS_URL || 'https://www.zomato.com/partners';
+      const loginUrl = `${zomatoPartnersUrl}/login`;
+      logger.debug(`Navigating to login page: ${loginUrl}`);
       
-      await this._withTimeout(
-        page.goto(`${zomatoPartnersUrl}/login`, {
-          waitUntil: 'networkidle2',
-          timeout: 60000,
-        }),
-        60000,
-        'Page navigation'
-      );
+      try {
+        await this._withTimeout(
+          page.goto(loginUrl, {
+            waitUntil: 'networkidle2',
+            timeout: 60000,
+          }),
+          60000,
+          'Page navigation'
+        );
+      } catch (error) {
+        if (error.message.includes('ERR_NAME_NOT_RESOLVED') || error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
+          logger.error(`DNS resolution failed for: ${loginUrl}`);
+          logger.error('Possible causes:');
+          logger.error('1. The domain might be incorrect');
+          logger.error('2. Network connectivity issues');
+          logger.error('3. The URL might require VPN/proxy');
+          logger.error(`4. Check if ZOMATO_PARTNERS_URL environment variable is set correctly`);
+          throw new Error(`Failed to resolve domain: ${zomatoPartnersUrl}. Please check your network connection and verify the ZOMATO_PARTNERS_URL is correct.`);
+        }
+        throw error;
+      }
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
@@ -368,74 +403,55 @@ class ZomotoStandalone {
   }
 }
 
-// Netlify serverless function handler
-exports.handler = async (event, context) => {
+// Vercel serverless function handler
+async function handler(req, res) {
   // Enable CORS
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers,
-      body: '',
-    };
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
 
-  if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({
-        success: false,
-        error: 'Method not allowed. Use POST.',
-      }),
-    };
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed. Use POST.',
+    });
   }
 
   try {
-    const body = JSON.parse(event.body || '{}');
-    const { identifier, countryCode, type = 'phone' } = body;
+    const { identifier, countryCode, type = 'phone' } = req.body;
 
     if (!identifier) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({
-          success: false,
-          error: 'identifier is required',
-        }),
-      };
+      return res.status(400).json({
+        success: false,
+        error: 'identifier is required',
+      });
     }
 
     const zomoto = new ZomotoStandalone();
     const data = await zomoto.sendOTP(identifier, countryCode, type);
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        success: true,
-        message: 'OTP sent successfully',
-        data,
-      }),
-    };
+    return res.status(200).json({
+      success: true,
+      message: 'OTP sent successfully',
+      data,
+    });
   } catch (error) {
     logger.error('Error in sendOTP:', error);
-    
+
     const statusCode = error.message.includes('detected automated browser') ? 403 : 500;
-    
-    return {
-      statusCode,
-      headers,
-      body: JSON.stringify({
-        success: false,
-        error: error.message || 'Failed to send OTP',
-      }),
-    };
+
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to send OTP',
+    });
   }
-};
+}
+
+// Support both CommonJS (Node.js) and ESM-style default export for Vercel
+module.exports = handler;
+module.exports.default = handler;
 
