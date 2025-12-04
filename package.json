@@ -1,0 +1,25 @@
+{
+  "name": "zomato-otp-api",
+  "version": "1.0.0",
+  "description": "Standalone Zomato OTP API for Vercel/Netlify",
+  "main": "api/send-otp.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "dev:vercel": "vercel dev",
+    "dev:netlify": "netlify dev",
+    "test:url": "node test-url.js"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^141.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "puppeteer": "^24.23.1",
+    "puppeteer-core": "^24.23.1",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

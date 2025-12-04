@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "api/send-otp.js": {
+      "maxDuration": 60,
+      "memory": 3008
+    }
+  },
+  "env": {
+    "ZOMATO_PARTNERS_URL": "https://partner.zomato.com"
+  }
+}
+
