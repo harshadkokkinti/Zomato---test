@@ -260,27 +260,59 @@ class ZomotoStandalone {
       const loginUrl = `${zomatoPartnersUrl}/login`;
       logger.debug(`Navigating to login page: ${loginUrl}`);
       
-      try {
-        await this._withTimeout(
-          page.goto(loginUrl, {
-            waitUntil: 'networkidle2',
-            timeout: 60000,
-          }),
-          60000,
-          'Page navigation'
-        );
-      } catch (error) {
-        if (error.message.includes('ERR_NAME_NOT_RESOLVED') || error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
-          logger.error(`DNS resolution failed for: ${loginUrl}`);
-          logger.error('Possible causes:');
-          logger.error('1. The domain might be incorrect');
-          logger.error('2. Network connectivity issues');
-          logger.error('3. The URL might require VPN/proxy');
-          logger.error(`4. Check if ZOMATO_PARTNERS_URL environment variable is set correctly`);
-          throw new Error(`Failed to resolve domain: ${zomatoPartnersUrl}. Please check your network connection and verify the ZOMATO_PARTNERS_URL is correct.`);
+      // Navigate to the login page with a retry to avoid "Requesting main frame too early" errors
+      const navigateWithRetry = async () => {
+        try {
+          await this._withTimeout(
+            page.goto(loginUrl, {
+              waitUntil: 'networkidle2',
+              timeout: 60000,
+            }),
+            60000,
+            'Page navigation'
+          );
+        } catch (error) {
+          // Handle DNS issues explicitly
+          if (
+            error.message.includes('ERR_NAME_NOT_RESOLVED') ||
+            error.message.includes('net::ERR_NAME_NOT_RESOLVED')
+          ) {
+            logger.error(`DNS resolution failed for: ${loginUrl}`);
+            logger.error('Possible causes:');
+            logger.error('1. The domain might be incorrect');
+            logger.error('2. Network connectivity issues');
+            logger.error('3. The URL might require VPN/proxy');
+            logger.error(
+              `4. Check if ZOMATO_PARTNERS_URL environment variable is set correctly`
+            );
+            throw new Error(
+              `Failed to resolve domain: ${zomatoPartnersUrl}. Please check your network connection and verify the ZOMATO_PARTNERS_URL is correct.`
+            );
+          }
+
+          // Work around Puppeteer "Requesting main frame too early" race in some serverless environments
+          if (error.message.includes('Requesting main frame too early')) {
+            logger.warn(
+              'Received "Requesting main frame too early" from Puppeteer. Retrying navigation after a short delay...'
+            );
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            // One retry only to avoid infinite loops
+            await this._withTimeout(
+              page.goto(loginUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000,
+              }),
+              60000,
+              'Page navigation (retry)'
+            );
+            return;
+          }
+
+          throw error;
         }
-        throw error;
-      }
+      };
+
+      await navigateWithRetry();
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
