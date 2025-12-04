@@ -6,7 +6,7 @@
     }
   },
   "env": {
-    "ZOMATO_PARTNERS_URL": "https://partner.zomato.com"
+    "ZOMATO_PARTNERS_URL": "https://www.zomato.com/partners"
   }
 }
 
