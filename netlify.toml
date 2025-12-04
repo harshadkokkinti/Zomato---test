@@ -2,15 +2,6 @@
   functions = "netlify/functions"
 
 [functions]
-  # Try nft bundler which handles native modules better
-  node_bundler = "nft"
+  node_bundler = "esbuild"
   included_files = ["netlify/functions/**"]
-  # Increase timeout for browser automation (max 26s on Pro plan, 10s on free)
-  timeout = 26
-
-[functions."send-otp"]
-  # Increase memory for Chromium (max 1024MB)
-  memory = 1024
-  # External packages that shouldn't be bundled
-  external_node_modules = []
 
