@@ -1,4 +1,14 @@
-const chromium = require('@sparticuz/chromium');
+// Try to load Chromium, but handle gracefully if it fails
+let chromium;
+try {
+  chromium = require('@sparticuz/chromium');
+  // Configure Chromium for Netlify/Lambda environment
+  chromium.setGraphicsMode(false);
+} catch (e) {
+  console.warn('Failed to load @sparticuz/chromium:', e.message);
+  chromium = null;
+}
+
 const puppeteer = require('puppeteer-core');
 const { v4: uuidv4 } = require('uuid');
 
@@ -155,19 +165,34 @@ class ZomotoStandalone {
       ignoreHTTPSErrors: true,
     };
 
+    // For Lambda/serverless environments, try to use @sparticuz/chromium
     if (isLambda && chromium) {
-      return {
-        ...baseOptions,
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
-      };
-    } else {
-      return {
-        ...baseOptions,
-        defaultViewport: { width: 1920, height: 1080 },
-      };
+      try {
+        // Get executable path - this might fail on Netlify if Chromium isn't properly bundled
+        const executablePath = await chromium.executablePath();
+        
+        if (executablePath) {
+          return {
+            ...baseOptions,
+            defaultViewport: chromium.defaultViewport || { width: 1920, height: 1080 },
+            executablePath: executablePath,
+            headless: chromium.headless !== undefined ? chromium.headless : true,
+          };
+        }
+      } catch (e) {
+        logger.warn('Failed to get chromium executable path:', e.message);
+        logger.warn('This might be a Netlify bundling issue. Consider using Vercel or ensuring Chromium is properly bundled.');
+        // Fall through to default options - this won't work but will give clearer error
+      }
     }
+    
+    // For local development or if Chromium setup fails
+    // Note: This will fail on Netlify without Chromium executable
+    logger.warn('Using default puppeteer options - this requires Chromium to be available');
+    return {
+      ...baseOptions,
+      defaultViewport: { width: 1920, height: 1080 },
+    };
   }
 
   /**
